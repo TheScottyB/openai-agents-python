@@ -1,151 +1,199 @@
 #!/usr/bin/env python3
 import os
 import sys
-from agents import Agent
-
-if not os.getenv("OPENAI_API_KEY"):
-    print("Error: OPENAI_API_KEY environment variable is not set")
-    sys.exit(1)
-
-# Create a workspace-aware agent
-agent = Agent(
-    name="Workspace Caretaker",
-    instructions="""You are a workspace management assistant. 
-    Help users organize, maintain, and navigate their workspace.
-    Current directory: {}
-    """.format(os.getcwd())
-)
-
-print("Workspace Caretaker initialized. Use Ctrl+C to exit.")
-try:
-    while True:
-        query = input("\nEnter your query (or 'exit' to quit): ")
-        if query.lower() in ['exit', 'quit']:
-            break
-        response = agent.invoke(query)
-        print("\nAgent:", response)
-except KeyboardInterrupt:
-    print("\nExiting...")
-
-#!/usr/bin/env python3
 import argparse
-import os
-import sys
-from typing import Optional, List
 import asyncio
+import asyncio
+from agents import Agent, Runner
+from agents.tool import function_tool
+from computers.computer import Computer
+from typing import Any, Dict, List, Optional, Union
+def parse_args():
+    parser = argparse.ArgumentParser(description='Computer Using Agent CLI')
+    parser.add_argument('--computer', default='local-playwright',
+                      help='Computer environment to use (default: local-playwright)')
+    parser.add_argument('--input', help='Initial input to the agent', default=None)
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--show', action='store_true', help='Show images during execution')
+    parser.add_argument('--start-url', default='https://bing.com',
+                      help='Start URL for browser environments')
+    return parser.parse_args()
 
-# Basic error handling function
-def handle_error(error_message: str, exit_code: int = 1) -> None:
-    """Print error message to stderr and exit with the given code."""
-    print(f"Error: {error_message}", file=sys.stderr)
-    sys.exit(exit_code)
+async def setup_computer(computer_type: str, start_url: str):
+    # Import the appropriate computer class based on type
+    if computer_type == 'local-playwright':
+        from computers.local_playwright import LocalPlaywright
+        computer = LocalPlaywright(start_url=start_url)
+        await computer.setup()
+        return computer
+    elif computer_type == 'docker':
+        from computers.docker import Docker
+        computer = Docker()
+        await computer.setup()
+        return computer
+    elif computer_type == 'browserbase':
+        from computers.browserbase import Browserbase
+        computer = Browserbase()
+        await computer.setup()
+        return computer
+    elif computer_type == 'scrapybara-browser':
+        from computers.scrapybara import ScrapybaraBrowser
+        computer = ScrapybaraBrowser()
+        await computer.setup()
+        return computer
+    elif computer_type == 'scrapybara-ubuntu':
+        from computers.scrapybara import ScrapybaraUbuntu
+        computer = ScrapybaraUbuntu()
+        await computer.setup()
+        return computer
+    else:
+        raise ValueError(f"Unknown computer type: {computer_type}")
 
-def setup_environment() -> None:
-    """Ensure the required environment variables are set."""
-    if not os.environ.get("OPENAI_API_KEY"):
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if not openai_key:
-            handle_error("OPENAI_API_KEY environment variable not set. Please set it before running this script.")
-
-def get_workspace_info() -> dict:
-    """Get basic information about the current workspace."""
-    try:
-        current_path = os.getcwd()
-        files = os.listdir(current_path)
-        return {
-            "current_directory": current_path,
-            "files_count": len(files),
-            "directories": [f for f in files if os.path.isdir(os.path.join(current_path, f))],
-            "python_files": [f for f in files if f.endswith('.py')],
-        }
-    except Exception as e:
-        handle_error(f"Failed to get workspace info: {str(e)}")
-        return {}  # This will not be reached due to handle_error exiting
-
-def main() -> None:
-    """Main entry point for the CLI application."""
-    parser = argparse.ArgumentParser(description="Workspace assistant using OpenAI Agent")
-    parser.add_argument("--computer", choices=["local-playwright"], 
-                        help="Specify computer interface to use (currently only local-playwright is supported)")
+# Define function schemas for the agent
+def get_tools(computer: Computer) -> List[Dict[str, Any]]:
+    tools = []
     
-    args = parser.parse_args()
-    
-    # Check for required environment variables
-    setup_environment()
-    
-    try:
-        from agents import Agent, Runner
-        from agents.tools import FileSearchTool, FileReadTool, ShellTool
-        from agents.schema import ModelConfig, RunnerOptions
-    except ImportError:
-        handle_error("Failed to import required classes from the 'agents' package. Please ensure it's installed correctly.")
-    
-    # Get workspace information to provide context for the agent
-    workspace_info = get_workspace_info()
-    
-    # Construct enhanced instructions with workspace awareness
-    instructions = (
-        "You are a workspace management assistant. "
-        "Help users organize, maintain, and navigate their workspace. "
-        f"Current directory: {workspace_info['current_directory']}. "
-        f"Contains {workspace_info['files_count']} files, "
-        f"including {len(workspace_info['directories'])} directories "
-        f"and {len(workspace_info['python_files'])} Python files."
-    )
-    
-    try:
-        # Configure workspace management tools
-        tools = [
-            FileSearchTool(),
-            FileReadTool(),
-            ShellTool(allowed_commands=["ls", "pwd", "find", "cat", "grep"])
-        ]
+    @function_tool(name_override="goto", description_override="Navigate to a specific URL")
+    async def goto(url: str):
+        """Navigate to a specific URL in the browser.
         
-        # Set up the OpenAI configuration
-        model_config = ModelConfig(
-            model="gpt-4-turbo-preview"
-        )
-        
-        # Create the agent with workspace management instructions
-        agent = Agent(
-            name="Workspace Caretaker",
-            instructions=instructions,
-            model_config=model_config,
-            tools=tools
-        )
-        
-        # Set up the Runner to execute the agent
-        runner = Runner(
-            agent=agent,
-            options=RunnerOptions(
-                stream=True
-            )
-        )
-        
-        if args.computer == "local-playwright":
-            print("Starting agent with local-playwright computer interface...")
-            print("Agent initialized with workspace awareness.")
-            print("Use Ctrl+C to stop the agent.")
+        Args:
+            url: The URL to navigate to
             
-            # Simple interaction loop
-            try:
-                while True:
-                    user_input = input("\nEnter query (or 'exit' to quit): ")
-                    if user_input.lower() in ['exit', 'quit']:
-                        break
-                    
-                    print("\nProcessing your request...")
-                    # Use the Runner class to execute the agent
-                    response = asyncio.run(runner.run(user_input))
-                    print("\nAgent response:")
-                    print(response.content)
-                    
-            except KeyboardInterrupt:
-                print("\nAgent terminated by user.")
-                
+        Returns:
+            str: Success message or error description
+        """
+        try:
+            await computer.goto(url)
+            return f"Successfully navigated to {url}"
+        except ValueError as e:
+            return f"Invalid URL error: {str(e)}"
+        except TimeoutError as e:
+            return f"Navigation timeout: {str(e)}"
+        except Exception as e:
+            return f"Navigation failed: {str(e)}"
+    
+    @function_tool(name_override="click_element", description_override="Click an element using a CSS selector")
+    async def click_element(selector: str):
+        """Click an element on the page using a CSS selector."""
+        return await computer.click_element(selector)
+    
+    @function_tool(name_override="type_into", description_override="Type text into a specific element")
+    async def type_into(selector: str, text: str):
+        """Type text into an element on the page using a CSS selector."""
+        return await computer.type_into(selector, text)
+    
+    @function_tool(name_override="get_screenshot", description_override="Take a screenshot of the current page")
+    async def get_screenshot():
+        """Take a screenshot of the current page and save it for reference."""
+        screenshot_data = await computer.get_screenshot()
+        # Instead of returning the raw bytes, return a message about the screenshot
+        return "Screenshot taken of the current page."
+    
+    @function_tool(name_override="get_current_url", description_override="Get the current page URL")
+    async def get_current_url():
+        """Get the URL of the current page."""
+        return await computer.get_current_url()
+    
+    @function_tool(name_override="back", description_override="Go back to the previous page")
+    async def back():
+        """Navigate back to the previous page."""
+        return await computer.back()
+    
+    @function_tool(name_override="forward", description_override="Go forward to the next page")
+    async def forward():
+        """Navigate forward to the next page."""
+        return await computer.forward()
+    
+    return [
+        goto,
+        click_element,
+        type_into,
+        get_screenshot,
+        get_current_url,
+        back,
+        forward
+    ]
+
+async def run_agent(agent: Agent, runner: Runner, query: str, debug: bool = False, computer_type: str = None, show: bool = False):
+    result = await runner.run(agent, query)
+    print("\nAgent:", result.final_output)
+    
+    # If debug mode is enabled, show additional information
+    if debug:
+        print("\nDebug info:")
+        print(f"Computer type: {computer_type}")
+        print(f"Show images: {show}")
+    
+    return result
+
+async def main_async():
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY environment variable is not set")
+        sys.exit(1)
+
+    args = parse_args()
+    
+    # Setup the computer environment
+    try:
+        computer = await setup_computer(args.computer, args.start_url)
     except Exception as e:
-        handle_error(f"Error initializing or running agent: {str(e)}")
+        print(f"Error setting up computer environment: {e}")
+        sys.exit(1)
+
+    # Create a workspace-aware agent with computer capabilities
+    # Create a workspace-aware agent with computer capabilities
+    agent = Agent(
+        name="Computer Using Agent",
+        instructions="""You are a computer-using assistant that can interact with the user's browser.
+        Available actions:
+        - Navigate to URLs with goto(url)
+        - Click elements with click_element(selector)
+        - Type text with type_into(selector, text)
+        - Take screenshots (use sparingly)
+        - Navigate with back() and forward()
+        
+        When browsing:
+        1. Use precise CSS selectors
+        2. Take screenshots only when necessary
+        3. Handle errors gracefully
+        
+        Current directory: {}
+        """.format(os.getcwd()),
+        tools=get_tools(computer)
+    )
+
+    # Create a runner instance
+    runner = Runner()
+
+    print(f"Computer Using Agent initialized with {args.computer} environment.")
+    print("Use Ctrl+C to exit.")
+
+    # If initial input was provided, process it first
+    if args.input:
+        await run_agent(agent, runner, args.input, args.debug, args.computer, args.show)
+
+    try:
+        while True:
+            query = input("\nEnter your query (or 'exit' to quit): ")
+            if query.lower() in ["exit", "quit"]:
+                break
+            
+            await run_agent(agent, runner, query, args.debug, args.computer, args.show)
+            
+    except KeyboardInterrupt:
+        print("\nExiting...")
+    finally:
+        # Cleanup any resources
+        if computer:
+            await computer.cleanup()
+
+def main():
+    try:
+        asyncio.run(main_async())
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
-
