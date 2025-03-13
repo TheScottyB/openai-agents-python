@@ -32,12 +32,11 @@ from pydantic import BaseModel, Field
 from agents import (
     Agent,
     AgentHooks,
-    FunctionTool,
-    HandoffOptions,
     ModelSettings,
     RunContext,
     Runner,
     function_tool,
+    handoff,
 )
 from agents.guardrails import (
     InputGuardrail,
@@ -146,34 +145,28 @@ class SupportAgentHooks(AgentHooks):
         self.messages_processed = 0
         self.tools_called = 0
         
-    async def on_run_start(self, agent, context, run_id, input_message):
+    async def on_start(self, context: RunContextWrapper[UserContext], agent: Agent[UserContext]) -> None:
         """Called when an agent run starts."""
         self.start_time = datetime.now()
-        logger.info(f"Agent run started: {agent.name} - Run ID: {run_id}")
+        logger.info(f"Agent run started: {agent.name}")
         logger.info(f"User: {context.context.username} (Tier: {context.context.tier})")
         
-    async def on_run_end(self, agent, context, run_id, response):
+    async def on_end(self, context: RunContextWrapper[UserContext], agent: Agent[UserContext], output: Any) -> None:
         """Called when an agent run completes."""
         duration = datetime.now() - self.start_time if self.start_time else None
-        logger.info(f"Agent run completed: {agent.name} - Run ID: {run_id}")
+        logger.info(f"Agent run completed: {agent.name}")
         logger.info(f"Duration: {duration}")
         logger.info(f"Messages processed: {self.messages_processed}")
         logger.info(f"Tools called: {self.tools_called}")
-        
-    async def on_message_received(self, agent, context, run_id, message):
-        """Called when a message is received from the user."""
-        self.messages_processed += 1
-        logger.debug(f"Message received: {message.content[:50]}...")
-        
-    async def on_tool_call(self, agent, context, run_id, tool_call):
+    
+    async def on_tool_start(self, context: RunContextWrapper[UserContext], agent: Agent[UserContext], tool: Any) -> None:
         """Called when a tool is invoked."""
         self.tools_called += 1
-        logger.info(f"Tool called: {tool_call.name} with args: {tool_call.arguments}")
+        logger.info(f"Tool called: {tool.name}")
         
-    async def on_handoff(self, source_agent, target_agent, context, run_id, handoff_args):
+    async def on_handoff(self, context: RunContextWrapper[UserContext], agent: Agent[UserContext], source: Agent[UserContext]) -> None:
         """Called when an agent hands off to another agent."""
-        logger.info(f"Handoff: {source_agent.name} → {target_agent.name}")
-        logger.info(f"Handoff args: {handoff_args}")
+        logger.info(f"Handoff: {source.name} → {agent.name}")
 
 # -----------------------------------------------------------------------------
 # SECTION 3: Guardrails
@@ -585,15 +578,15 @@ triage_agent = Agent[UserContext](
         create_support_ticket,
     ],
     handoffs=[
-        HandoffOptions(
-            agent=billing_agent,
-            name="Billing Specialist",
-            description="Handles billing issues, refunds, subscription questions",
+        handoff(
+            billing_agent,
+            tool_name_override="transfer_to_billing_specialist",
+            tool_description_override="Handles billing issues, refunds, subscription questions",
         ),
-        HandoffOptions(
-            agent=technical_agent,
-            name="Technical Support",
-            description="Resolves technical issues, bugs, API problems, integration questions",
+        handoff(
+            technical_agent,
+            tool_name_override="transfer_to_technical_support",
+            tool_description_override="Resolves technical issues, bugs, API problems, integration questions",
         ),
     ],
     hooks=SupportAgentHooks(),
@@ -618,7 +611,6 @@ premium_triage_agent = triage_agent.clone(
 # -----------------------------------------------------------------------------
 # SECTION 6: Main Execution Logic
 # -----------------------------------------------------------------------------
-
 async def simulate_conversation(agent: Agent[UserContext], user_context: UserContext, messages: List[str]) -> None:
     """Simulate a conversation with an agent."""
     runner = Runner()
@@ -628,17 +620,25 @@ async def simulate_conversation(agent: Agent[UserContext], user_context: UserCon
     print(f"User: {user_context.username} ({user_context.tier.value} tier)")
     print("="*80)
     
-    # Create a session for this conversation
-    session = await runner.create_session(agent, user_context)
-    
     # Process each message in the conversation
+    prev_result = None
+    
     for message in messages:
         print(f"\nUser: {message}")
-        response = await runner.run(session, message)
+        
+        # First message or new conversation
+        if prev_result is None:
+            response = await Runner.run(agent, user_context, message)
+        else:
+            # Continue conversation with previous messages
+            input_messages = prev_result.to_input_list() + [{"content": message, "role": "user"}]
+            response = await Runner.run(agent, user_context, input=input_messages)
+        
+        prev_result = response
         
         # Handle the response based on its type
-        if isinstance(response, str):
-            print(f"\n{agent.name}: {response}")
+        if isinstance(response.content, str):
+            print(f"\n{agent.name}: {response.content}")
         elif hasattr(response, 'model_dump'):
             # For pydantic models
             print(f"\n{agent.name} response:")
@@ -649,6 +649,7 @@ async def simulate_conversation(agent: Agent[UserContext], user_context: UserCon
             print(f"\n{agent.name} response:")
             print(response)
             
+    print("\n" + "="*80 + "\n")
     print("\n" + "="*80 + "\n")
 
 async def main():
