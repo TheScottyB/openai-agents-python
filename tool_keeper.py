@@ -52,17 +52,20 @@ from agents import (
     Agent,
     Runner,
     ModelSettings,
-    TResponseTextItem,
-    TResponseFunctionCallItem,
-    HandoffItem,
-    TResponseInput,
+    MessageOutputItem,
+    HandoffCallItem,
     TResponseInputItem,
+    trace,
 )
 
 from tool_keeper_agents import (
     create_analyzer_agent,
     create_validator_agent,
     create_documenter_agent,
+    create_judge_agent,
+    tool_schema_guardrail,
+    sensitive_data_guardrail,
+    offensive_content_guardrail,
 )
 
 
@@ -394,17 +397,16 @@ class ToolKeeper:
         # Get streaming response
         response_chunks = []
         
-        async for event in Runner.stream(self.router.agent, query, context=self.context):
-            if isinstance(event, TResponseTextItem):
-                chunk = event.text
+        from openai.types.responses import ResponseTextDeltaEvent
+        
+        result = Runner.run_streamed(self.router.agent, query, context=self.context)
+        async for event in result.stream_events():
+            if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                chunk = event.data.delta or ""
                 response_chunks.append(chunk)
                 yield chunk
-            elif isinstance(event, TResponseFunctionCallItem):
-                tool_name = event.function_call.name
-                arguments = event.function_call.arguments
-                yield f"\n[Using tool: {tool_name}]\n"
-            elif isinstance(event, HandoffItem):
-                handoff_name = event.handoff_to.name
+            elif event.type == "run_item_stream_event" and event.name == "handoff_requested":
+                handoff_name = event.item.raw_item.function.name
                 yield f"\n[Handing off to specialized agent: {handoff_name}]\n"
         
         # Add complete response to history
@@ -452,7 +454,7 @@ async def main():
     group.add_argument("--document", help="Generate documentation for a tool definition file", type=str)
     group.add_argument("--implement", help="Generate implementation for a tool definition file", type=str)
     group.add_argument("--evaluate", help="Evaluate quality of a tool definition file", type=str)
-    group.add_argument("--evaluate-impl", help="Evaluate implementation against definition", nargs=2, 
+    group.add_argument("--evaluate-impl", nargs=2, 
                       metavar=('IMPL_FILE', 'DEF_FILE'), 
                       help="Evaluate implementation file against definition file")
     group.add_argument("--comprehensive", help="Process tool definition comprehensively with all agents in parallel", type=str)

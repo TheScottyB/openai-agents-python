@@ -112,17 +112,13 @@ async def demo_guardrail_protection(tool_keeper: ToolKeeper) -> None:
 
 async def main():
     """Main demonstration function."""
-    print("\n=== Enhanced Tool Keeper Multi-Agent System Demo ===")
-    print("This demo shows the improved ToolKeeper system with advanced capabilities:")
-    print("- Input and output guardrails for content validation")
-    print("- Parallel processing for maximum efficiency")
-    print("- LLM-as-judge pattern for quality evaluation")
-    print("- Enhanced streaming responses with agent handoffs")
+    print("\n=== Tool Keeper Demo ===")
+    print("This demo shows the functionality of the enhanced ToolKeeper system.")
     
     # Create the Tool Keeper
     tool_keeper = ToolKeeper()
     
-    # Example tool definitions
+    # Example tool definition
     browser_tool = {
         "name": "goto_url",
         "description": "Navigate to a specific URL in the browser",
@@ -139,38 +135,33 @@ async def main():
         }
     }
     
-    # Demo 1: Streaming response with agent handoffs
-    await demo_with_streaming(
-        tool_keeper,
-        f"Validate this tool definition against OpenAI Agents SDK requirements: {json.dumps(browser_tool)}"
-    )
+    # Test the basic analyze functionality first
+    print("\nAnalyzing tool definition...")
+    result = await tool_keeper.analyze_tool(json.dumps(browser_tool))
+    print(f"Analysis result:\n{result}\n")
     
-    # Demo 2: Judge evaluation
-    await demo_judge_evaluation(tool_keeper, browser_tool)
+    # Test the validation functionality
+    print("\nValidating tool definition...")
+    result = await tool_keeper.validate_tool(json.dumps(browser_tool))
+    print(f"Validation result:\n{result}\n")
     
-    # Demo 3: Guardrails protection
-    await demo_guardrail_protection(tool_keeper)
+    # Test the judge evaluation
+    print("\nEvaluating tool definition with judge agent...")
+    result = await tool_keeper.evaluate_tool(json.dumps(browser_tool))
+    print(f"Evaluation result:\n{result}\n")
     
-    # Demo 4: Comprehensive parallel processing
-    await demo_comprehensive_processing(tool_keeper, EXAMPLE_TOOL)
-    
-    # Try a complex request that demonstrates router handoffs
-    await demo_with_streaming(
-        tool_keeper,
-        f"""I have this tool definition:
-        
-        {json.dumps(EXAMPLE_TOOL, indent=2)}
-        
-        Could you validate it, suggest any improvements, and then generate Python implementation?"""
-    )
-    
-    print("\nWould you like to start an interactive chat session? (y/n)")
-    response = input()
-    
-    if response.lower() in ("y", "yes"):
-        await tool_keeper.chat()
+    # Test the comprehensive parallel processing
+    print("\nProcessing tool definition comprehensively in parallel...")
+    print("(This may take a moment as it runs all agents in parallel)")
+    results = await tool_keeper.process_tool_comprehensive(json.dumps(EXAMPLE_TOOL))
+    if "error" in results:
+        print(f"Error: {results['error']}")
     else:
-        print("\n=== Demo Complete ===")
+        print("\nComprehensive processing completed successfully!")
+        print("Results include validation, analysis, documentation, implementation, and evaluation.")
+    
+    # Skip the interactive part which causes EOF errors during testing
+    print("\n=== Demo Complete ===")
 
 
 if __name__ == "__main__":

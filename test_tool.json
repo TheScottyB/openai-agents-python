@@ -1,0 +1,15 @@
+{
+    "name": "fetch_weather",
+    "description": "Fetch weather information for a location",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "description": "The location to get weather for (city, address, etc.)"
+        },
+        "units": {
+            "type": "string",
+            "description": "Temperature units (metric/imperial)",
+            "required": false
+        }
+    }
+}
