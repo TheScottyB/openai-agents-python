@@ -1,0 +1,72 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: Combined Agents Demo",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/combined_agents_demo.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "ENABLE_TRACING": "true"
+            }
+        },
+        {
+            "name": "Python: Combined Agents Debug",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/combined_agents_debug.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "stopOnEntry": false,
+            "showReturnValue": true,
+            "redirectOutput": true
+        },
+        {
+            "name": "Python: Run Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/test_combined_agents.py",
+                "-v"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: Run Single Test",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/test_combined_agents.py::TestUnitConversions::test_convert_temperature_valid",
+                "-v"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}

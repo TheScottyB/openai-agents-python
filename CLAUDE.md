@@ -1,13 +1,15 @@
 # OpenAI Agents Python SDK Guide
 
 ## Build Commands
-- Install dependencies: `uv sync --all-extras --all-packages --group dev`
+- Install dependencies: `uv sync --all-extras --all-packages --group dev` or `make sync`
 - Run tests: `uv run pytest` or `make tests`
 - Run single test: `uv run pytest tests/path_to_test.py::test_name -v`
 - Lint code: `uv run ruff check` or `make lint`
 - Format code: `uv run ruff format` or `make format`
 - Type check: `uv run mypy .` or `make mypy`
 - Build docs: `uv run mkdocs build` or `make build-docs`
+- Serve docs locally: `make serve-docs`
+- Coverage check: `uv run coverage run -m pytest && uv run coverage report`
 
 ## Code Style Guidelines
 - Line length: 100 characters max
@@ -17,5 +19,6 @@
 - Error handling: Use typed exceptions from src/agents/exceptions.py
 - Naming: Use snake_case for variables/functions, PascalCase for classes
 - Testing: Use pytest with asyncio mode="auto"
+- Python version: Compatible with Python 3.9+
 - Use Pydantic >=2.10 for data validation
 - Format with ruff (version 0.9.2)
