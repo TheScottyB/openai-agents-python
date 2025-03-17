@@ -33,17 +33,18 @@ from pydantic import BaseModel, Field
 from agents import (
     Agent,
     AgentHooks,
-    AgentResponse,
     ModelSettings,
-    RunContext,
     Runner,
     function_tool,
     handoff,
+    input_guardrail,
+    output_guardrail,
 )
 from agents import (
     InputGuardrail,
     OutputGuardrail,
-    ValidationResult,
+    GuardrailFunctionOutput,
+    RunContextWrapper,
 )
 
 # Configure logging
@@ -182,7 +183,7 @@ class MathConstant:
 
 @function_tool
 def convert_temperature(
-    value: float, from_unit: str, to_unit: str, context: RunContext[AgentContext]
+    context: RunContextWrapper[AgentContext], value: float, from_unit: str, to_unit: str
 ) -> Dict[str, Any]:
     """Convert temperature between Celsius, Fahrenheit and Kelvin."""
     try:
@@ -210,7 +211,7 @@ def convert_temperature(
 
 @function_tool
 def convert_length(
-    value: float, from_unit: str, to_unit: str, context: RunContext[AgentContext]
+    context: RunContextWrapper[AgentContext], value: float, from_unit: str, to_unit: str
 ) -> Dict[str, Any]:
     """Convert length between meters, feet, inches, and miles."""
     try:
@@ -237,7 +238,7 @@ def convert_length(
 
 @function_tool
 def convert_weight(
-    value: float, from_unit: str, to_unit: str, context: RunContext[AgentContext]
+    context: RunContextWrapper[AgentContext], value: float, from_unit: str, to_unit: str
 ) -> Dict[str, Any]:
     """Convert weight between kilograms, pounds, and ounces."""
     try:
@@ -263,7 +264,7 @@ def convert_weight(
 
 
 @function_tool
-def get_math_constant(name: str, context: RunContext[AgentContext]) -> Dict[str, Any]:
+def get_math_constant(context: RunContextWrapper[AgentContext], name: str) -> Dict[str, Any]:
     """Get information about a mathematical constant."""
     try:
         math_constants = MathConstant()
@@ -287,7 +288,7 @@ def get_math_constant(name: str, context: RunContext[AgentContext]) -> Dict[str,
 
 
 @function_tool
-def get_user_details(context: RunContext[AgentContext]) -> Dict[str, Any]:
+def get_user_details(context: RunContextWrapper[AgentContext]) -> Dict[str, Any]:
     """Get information about the current user."""
     user = context.context
 
@@ -312,7 +313,7 @@ class AgentLifecycleHooks(AgentHooks):
         self.tools_called = 0
 
     async def on_start(
-        self, context: RunContext[AgentContext], agent: Agent[AgentContext]
+        self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext]
     ) -> None:
         """Called when an agent run starts."""
         self.start_time = datetime.now()
@@ -322,7 +323,7 @@ class AgentLifecycleHooks(AgentHooks):
         )
 
     async def on_end(
-        self, context: RunContext[AgentContext], agent: Agent[AgentContext], output: Any
+        self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], output: Any
     ) -> None:
         """Called when an agent run completes."""
         duration = datetime.now() - self.start_time if self.start_time else None
@@ -331,7 +332,7 @@ class AgentLifecycleHooks(AgentHooks):
         logger.info(f"Tools called: {self.tools_called}")
 
     async def on_tool_start(
-        self, context: RunContext[AgentContext], agent: Agent[AgentContext], tool: Any
+        self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Any
     ) -> None:
         """Called when a tool is invoked."""
         self.tools_called += 1
@@ -343,86 +344,69 @@ class AgentLifecycleHooks(AgentHooks):
 # -----------------------------------------------------------------------------
 
 
-class CalculationGuardrail(InputGuardrail):
-    """Input guardrail to validate calculation-related queries."""
+@input_guardrail
+async def calculation_guardrail(
+    context: RunContextWrapper[AgentContext],
+    agent: Agent[Any],
+    input_text: str | list[TResponseInputItem]
+) -> GuardrailFunctionOutput:
+    # Define keywords for valid calculation queries
+    calculation_keywords = [
+        "convert", "calculate", "compute", "solve", "math",
+        "constant", "pi", "celsius", "fahrenheit", "kelvin",
+        "meter", "foot", "feet", "inch", "mile",
+        "kilogram", "pound", "ounce",
+    ]
 
-    async def validate(
-        self, input_text: str, context: RunContext[AgentContext]
-    ) -> ValidationResult:
-        # Define keywords for valid calculation queries
-        calculation_keywords = [
-            "convert",
-            "calculate",
-            "math",
-            "formula",
-            "equation",
-            "value",
-            "constant",
-            "celsius",
-            "fahrenheit",
-            "kelvin",
-            "meter",
-            "foot",
-            "feet",
-            "inch",
-            "mile",
-            "kilogram",
-            "pound",
-            "ounce",
-            "pi",
-            "e",
-            "golden ratio",
-            "temperature",
-            "length",
-            "weight",
+    # Check if any calculation keyword is in the input
+    input_str = input_text if isinstance(input_text, str) else str(input_text)
+    if any(keyword in input_str.lower() for keyword in calculation_keywords):
+        return GuardrailFunctionOutput(
+            output_info="Input contains calculation-related keywords",
+            tripwire_triggered=False
+        )
+
+    # Minimal query length check
+    if len(input_str.split()) < 3:
+        return GuardrailFunctionOutput(
+            output_info="Please provide a more detailed query for calculation or conversion.",
+            tripwire_triggered=True
+        )
+
+    # Default to valid if we're not sure
+    return GuardrailFunctionOutput(
+        output_info="Input passed default validation",
+        tripwire_triggered=False
+    )
+
+
+@output_guardrail
+async def response_format_guardrail(
+    context: RunContextWrapper[AgentContext],
+    agent: Agent[Any],
+    agent_output: Any
+) -> GuardrailFunctionOutput:
+    # For conversion results, ensure they include unit information
+    output_text = str(agent_output)
+    conversion_keywords = ["convert", "conversion", "calculated", "result", "value"]
+
+    if any(keyword in output_text.lower() for keyword in conversion_keywords):
+        unit_keywords = [
+            "celsius", "fahrenheit", "kelvin",
+            "meters", "feet", "inches", "miles",
+            "kilograms", "pounds", "ounces",
         ]
 
-        # Check if any calculation keyword is in the input
-        if any(keyword in input_text.lower() for keyword in calculation_keywords):
-            return ValidationResult(valid=True)
-
-        # Minimal query length check
-        if len(input_text.split()) < 3:
-            return ValidationResult(
-                valid=False,
-                message="Please provide a more detailed query for calculation or conversion.",
+        if not any(unit in output_text.lower() for unit in unit_keywords):
+            return GuardrailFunctionOutput(
+                output_info="Please include the units in your response for clarity.",
+                tripwire_triggered=True
             )
 
-        # Default to valid if we're not sure
-        return ValidationResult(valid=True)
-
-
-class ResponseFormatGuardrail(OutputGuardrail):
-    """Output guardrail to ensure responses include proper unit information."""
-
-    async def validate(
-        self, output_text: str, context: RunContext[AgentContext]
-    ) -> ValidationResult:
-        # For conversion results, ensure they include unit information
-        conversion_keywords = ["convert", "conversion", "calculated", "result", "value"]
-
-        if any(keyword in output_text.lower() for keyword in conversion_keywords):
-            unit_keywords = [
-                "celsius",
-                "fahrenheit",
-                "kelvin",
-                "meter",
-                "foot",
-                "feet",
-                "inch",
-                "mile",
-                "kilogram",
-                "pound",
-                "ounce",
-            ]
-
-            if not any(unit in output_text.lower() for unit in unit_keywords):
-                return ValidationResult(
-                    valid=False,
-                    message="Please include the units in your response for clarity.",
-                )
-
-        return ValidationResult(valid=True)
+    return GuardrailFunctionOutput(
+        output_info="Output format validation passed",
+        tripwire_triggered=False
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -451,7 +435,7 @@ For constants, include both the value and a brief explanation of its significanc
         get_user_details,
     ],
     hooks=AgentLifecycleHooks(),
-    guardrails=[CalculationGuardrail(), ResponseFormatGuardrail()],
+    guardrails=[calculation_guardrail, response_format_guardrail],
 )
 
 # Main Customer Service Agent that uses the calculator as a tool
@@ -471,7 +455,7 @@ Always be polite, clear,
         get_user_details,
     ],
     hooks=AgentLifecycleHooks(),
-    guardrails=[CalculationGuardrail(), ResponseFormatGuardrail()],
+    guardrails=[calculation_guardrail, response_format_guardrail],
 )
 
 #!/usr/bin/env python3
