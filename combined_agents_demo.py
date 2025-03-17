@@ -4,15 +4,17 @@
 Combined Agents Demo
 ===================
 
-This example demonstrates how to use multiple specialized agents together:
-1. A Calculator Agent with unit conversion and constants
-2. A Customer Service Agent that uses the calculator as a tool
+This example demonstrates a simple agent system with calculator functionality and 
+customer service capabilities using OpenAI Agents SDK best practices.
 
-It showcases:
-- Using one agent as a tool for another agent
+Features:
+- Calculator Agent with unit conversion
+- Customer Service Agent that uses Calculator as a tool
+- Proper handoffs between agents
 - Input and output guardrails
+- Structured outputs with Pydantic models
 - Lifecycle hooks for monitoring
-- Proper error handling
+- Tracing for debugging
 
 To run:
     python combined_agents_demo.py
@@ -22,33 +24,28 @@ Requirements:
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
-from enum import Enum
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 from pydantic import BaseModel, Field
 
-# Import from the OpenAI Agents SDK
 from agents import (
     Agent,
     AgentHooks,
+    InputGuardrail,
     ModelSettings,
+    OutputGuardrail,
     Runner,
-    function_tool,
-    input_guardrail,
-    OutputGuardrailTripwireTriggered,
     RunContextWrapper,
     GuardrailFunctionOutput,
+    function_tool,
+    input_guardrail,
+    output_guardrail,
+    set_tracing_disabled,
 )
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("combined_agents")
-
+from agents.exceptions import InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered
+from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
 
 # -----------------------------------------------------------------------------
 # SECTION 1: Context and Output Types
@@ -56,259 +53,252 @@ logger = logging.getLogger("combined_agents")
 
 @dataclass
 class CustomerContext:
-    """Context for tracking customer interactions."""
-
+    """Context for tracking customer information and interactions."""
     customer_id: str
-    username: str = field(default="User")
+    username: str
     premium_user: bool = False
-    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
     session_start_time: datetime = field(default_factory=datetime.now)
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
 
-    def add_to_history(self, role: str, content: str) -> None:
-        """Add an interaction to the conversation history."""
-        self.conversation_history.append(
-            {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
-        )
-
-    def log_interaction(
-        self, tool_name: str, input_data: Any, output_data: Any
-    ) -> None:
-        """Log an interaction with a tool to the conversation history."""
-        self.conversation_history.append(
-            {
-                "timestamp": datetime.now().isoformat(),
-                "tool": tool_name,
-                "input": input_data,
-                "output": output_data,
-            }
-        )
+    def log_interaction(self, tool_name: str, input_data: Any, output_data: Any) -> None:
+        """Log a tool interaction to the conversation history."""
+        self.conversation_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "tool": tool_name,
+            "input": input_data,
+            "output": output_data,
+        })
 
 
-class SupportCategory(str, Enum):
-    """Categories for support tickets."""
+class CalculationResult(BaseModel):
+    """Structured output for calculation results."""
+    result: str = Field(description="The calculation result")
+    units: Optional[str] = Field(None, description="The units of the result, if applicable")
+    explanation: str = Field(description="Explanation of the calculation")
 
-    CALCULATION = "calculation"
-    UNIT_CONVERSION = "unit_conversion"
-    CONSTANT_INFO = "constant_info"
-    GENERAL = "general"
 
+class CustomerResponse(BaseModel):
+    """Structured output for customer service responses."""
+    answer: str = Field(description="The response to the customer's query")
+    sentiment: str = Field(description="The sentiment of the response (positive, neutral, negative)")
+    requires_escalation: bool = Field(description="Whether this query requires escalation to a human agent")
+    calculation_result: Optional[CalculationResult] = Field(
+        None, description="Results of any calculations performed"
+    )
+
+
+class MathScreenerOutput(BaseModel):
+    """Output format for math query screening."""
+    is_math_query: bool = Field(description="Whether the query is math-related")
+    reasoning: str = Field(description="Reasoning for the determination")
+
+
+class ResponseQualityOutput(BaseModel):
+    """Output format for response quality checking."""
+    is_appropriate: bool = Field(description="Whether the response is appropriate")
+    reasoning: str = Field(description="Reasoning for the determination")
 
 # -----------------------------------------------------------------------------
-# SECTION 2: Unit Conversion and Math Constants
+# SECTION 2: Unit Conversions
 # -----------------------------------------------------------------------------
 
-class UnitConverter:
-    """Tool for converting between different units of measurement."""
+@function_tool(use_docstring_info=True)
+def convert_temperature(
+    ctx: RunContextWrapper[CustomerContext], 
+    value: float, 
+    from_unit: str, 
+    to_unit: str
+) -> Dict[str, Any]:
+    """Convert temperature between Celsius, Fahrenheit and Kelvin.
     
-    @staticmethod
-    def convert_temperature(value: float, from_unit: str, to_unit: str) -> float:
-        """Convert temperature between Celsius, Fahrenheit and Kelvin."""
+    Args:
+        value: The temperature value to convert
+        from_unit: The source unit (c/celsius, f/fahrenheit, k/kelvin)
+        to_unit: The target unit (c/celsius, f/fahrenheit, k/kelvin)
+        
+    Returns:
+        A dictionary containing the conversion result
+    """
+    try:
+        # Define conversion functions
         conversions = {
-            ("c", "f"): lambda x: x * 9 / 5 + 32,
-            ("f", "c"): lambda x: (x - 32) * 5 / 9,
+            ("c", "f"): lambda x: x * 9/5 + 32,
+            ("f", "c"): lambda x: (x - 32) * 5/9,
             ("c", "k"): lambda x: x + 273.15,
             ("k", "c"): lambda x: x - 273.15,
-            ("f", "k"): lambda x: (x - 32) * 5 / 9 + 273.15,
-            ("k", "f"): lambda x: (x - 273.15) * 9 / 5 + 32,
+            ("f", "k"): lambda x: (x - 32) * 5/9 + 273.15,
+            ("k", "f"): lambda x: (x - 273.15) * 9/5 + 32,
         }
-        key = (from_unit.lower()[0], to_unit.lower()[0])
+        
+        # Convert units to single character
+        from_char = from_unit.lower()[0]
+        to_char = to_unit.lower()[0]
+        key = (from_char, to_char)
+        
         if key not in conversions:
-            raise ValueError(f"Cannot convert from {from_unit} to {to_unit}")
-        return conversions[key](value)
-
-    @staticmethod
-    def convert_length(value: float, from_unit: str, to_unit: str) -> float:
-        """Convert length between meters, feet, inches, and miles."""
-        units = {"m": 1.0, "ft": 0.3048, "in": 0.0254, "mi": 1609.34}
-        try:
-            return value * units[from_unit] / units[to_unit]
-        except KeyError:
-            raise ValueError(f"Invalid units: {from_unit} to {to_unit}")
-
-    @staticmethod
-    def convert_weight(value: float, from_unit: str, to_unit: str) -> float:
-        """Convert weight between kilograms, pounds, and ounces."""
-        units = {"kg": 1.0, "lb": 0.453592, "oz": 0.0283495}
-        if from_unit not in units or to_unit not in units:
-            raise ValueError(f"Invalid weight units: {from_unit} to {to_unit}")
-        return value * units[from_unit] / units[to_unit]
-
-
-class MathConstant:
-    """Tool providing mathematical constants and their explanations."""
-
-    CONSTANTS: Dict[str, Tuple[float, str]] = {
-        "pi": (3.14159265359, "The ratio of a circle's circumference to its diameter"),
-        "e": (2.71828182846, "The base of the natural logarithm"),
-        "golden_ratio": (
-            1.61803398875,
-            "The ratio where the ratio of the sum of quantities to the larger quantity "
-            "is equal to the ratio of the larger quantity to the smaller one",
-        ),
-        "avogadro": (
-            6.02214076e23,
-            "The number of constituent particles in one mole of a substance",
-        ),
-        "plank": (
-            6.62607015e-34,
-            "The fundamental quantum of action in quantum mechanics",
-        ),
-    }
-
-    @classmethod
-    def get_constant(cls, name: str) -> Tuple[float, str]:
-        """Retrieve a mathematical constant and its explanation."""
-        name = name.lower()
-        if name not in cls.CONSTANTS:
-            raise ValueError(f"Unknown constant: {name}")
-        return cls.CONSTANTS[name]
-
-
-# -----------------------------------------------------------------------------
-# SECTION 3: Agent Tools
-# -----------------------------------------------------------------------------
-
-@function_tool
-def convert_temperature(
-    context: RunContextWrapper[CustomerContext], value: float, from_unit: str, to_unit: str
-) -> Dict[str, Any]:
-    """Convert temperature between Celsius, Fahrenheit and Kelvin."""
-    try:
-        converter = UnitConverter()
-        result = converter.convert_temperature(value, from_unit, to_unit)
-
+            return {
+                "success": False,
+                "error": f"Cannot convert from {from_unit} to {to_unit}"
+            }
+            
+        result = conversions[key](value)
+        
         # Log the interaction
-        context.context.log_interaction(
+        ctx.context.log_interaction(
             "convert_temperature",
             {"value": value, "from_unit": from_unit, "to_unit": to_unit},
-            result,
+            result
         )
-
+        
         return {
+            "success": True,
             "original_value": value,
             "original_unit": from_unit,
             "converted_value": result,
             "converted_unit": to_unit,
-            "formula_used": f"Conversion formula from {from_unit} to {to_unit}",
-            "success": True,
         }
-    except ValueError as e:
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-@function_tool
+@function_tool(use_docstring_info=True)
 def convert_length(
-    context: RunContextWrapper[CustomerContext], value: float, from_unit: str, to_unit: str
+    ctx: RunContextWrapper[CustomerContext], 
+    value: float, 
+    from_unit: str, 
+    to_unit: str
 ) -> Dict[str, Any]:
-    """Convert length between meters, feet, inches, and miles."""
+    """Convert length between meters, feet, inches, and miles.
+    
+    Args:
+        value: The length value to convert
+        from_unit: The source unit (m, ft, in, mi)
+        to_unit: The target unit (m, ft, in, mi)
+        
+    Returns:
+        A dictionary containing the conversion result
+    """
     try:
-        converter = UnitConverter()
-        result = converter.convert_length(value, from_unit, to_unit)
-
+        # Define unit conversions to meters
+        units = {"m": 1.0, "ft": 0.3048, "in": 0.0254, "mi": 1609.34}
+        
+        if from_unit not in units or to_unit not in units:
+            return {
+                "success": False,
+                "error": f"Invalid units: {from_unit} to {to_unit}. Supported units: m, ft, in, mi"
+            }
+            
+        # Convert to target unit
+        result = value * units[from_unit] / units[to_unit]
+        
         # Log the interaction
-        context.context.log_interaction(
+        ctx.context.log_interaction(
             "convert_length",
             {"value": value, "from_unit": from_unit, "to_unit": to_unit},
-            result,
+            result
         )
-
+        
         return {
+            "success": True,
             "original_value": value,
             "original_unit": from_unit,
             "converted_value": result,
             "converted_unit": to_unit,
-            "success": True,
         }
-    except ValueError as e:
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-@function_tool
-def convert_weight(
-    context: RunContextWrapper[CustomerContext], value: float, from_unit: str, to_unit: str
-) -> Dict[str, Any]:
-    """Convert weight between kilograms, pounds, and ounces."""
-    try:
-        converter = UnitConverter()
-        result = converter.convert_weight(value, from_unit, to_unit)
-
-        # Log the interaction
-        context.context.log_interaction(
-            "convert_weight",
-            {"value": value, "from_unit": from_unit, "to_unit": to_unit},
-            result,
-        )
-
-        return {
-            "original_value": value,
-            "original_unit": from_unit,
-            "converted_value": result,
-            "converted_unit": to_unit,
-            "success": True,
-        }
-    except ValueError as e:
-        return {"success": False, "error": str(e)}
-
-
-@function_tool
+@function_tool(use_docstring_info=True)
 def get_math_constant(
-    context: RunContextWrapper[CustomerContext], name: str
+    ctx: RunContextWrapper[CustomerContext], 
+    name: str
 ) -> Dict[str, Any]:
-    """Get information about a mathematical constant."""
+    """Get information about a mathematical constant.
+    
+    Args:
+        name: The name of the constant (pi, e, golden_ratio, avogadro, planck)
+        
+    Returns:
+        A dictionary containing the constant's value and description
+    """
     try:
-        math_constants = MathConstant()
-        value, description = math_constants.get_constant(name)
-
+        # Define constants with their values and descriptions
+        constants = {
+            "pi": (3.14159265359, "The ratio of a circle's circumference to its diameter"),
+            "e": (2.71828182846, "The base of the natural logarithm"),
+            "golden_ratio": (
+                1.61803398875,
+                "The ratio where the ratio of the sum of quantities to the larger quantity "
+                "is equal to the ratio of the larger quantity to the smaller one"
+            ),
+            "avogadro": (
+                6.02214076e23,
+                "The number of constituent particles in one mole of a substance"
+            ),
+            "planck": (
+                6.62607015e-34,
+                "The fundamental quantum of action in quantum mechanics"
+            ),
+        }
+        
+        name_lower = name.lower()
+        if name_lower not in constants:
+            return {
+                "success": False,
+                "error": f"Unknown constant: {name}. Supported constants: pi, e, golden_ratio, avogadro, planck"
+            }
+            
+        value, description = constants[name_lower]
+        
         # Log the interaction
-        context.context.log_interaction(
+        ctx.context.log_interaction(
             "get_math_constant",
             {"name": name},
-            {"value": value, "description": description},
+            {"value": value, "description": description}
         )
-
+        
         return {
+            "success": True,
             "constant_name": name,
             "value": value,
             "description": description,
-            "success": True,
         }
-    except ValueError as e:
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-@function_tool
-def get_user_details(context: RunContextWrapper[CustomerContext]) -> Dict[str, Any]:
-    """Get information about the current user."""
-    user = context.context
-
+@function_tool(use_docstring_info=True)
+def get_user_details(
+    ctx: RunContextWrapper[CustomerContext]
+) -> Dict[str, Any]:
+    """Get information about the current user.
+    
+    Returns:
+        A dictionary containing user information
+    """
+    user = ctx.context
+    
     return {
         "customer_id": user.customer_id,
         "username": user.username,
         "is_premium": user.premium_user,
+        "session_started": user.session_start_time.isoformat(),
         "conversation_count": len(user.conversation_history),
     }
 
-
 # -----------------------------------------------------------------------------
-# SECTION 4: Lifecycle Hooks
+# SECTION 3: Lifecycle Hooks
 # -----------------------------------------------------------------------------
 
 class AgentLifecycleHooks(AgentHooks):
     """Custom hooks for monitoring agent lifecycle."""
 
-    def __init__(self):
-        self.start_time = None
-        self.tools_called = 0
-
     async def on_start(
         self, context: RunContextWrapper[CustomerContext], agent: Agent[CustomerContext]
     ) -> None:
         """Called when an agent run starts."""
-        self.start_time = datetime.now()
-        logger.info(f"Agent run started: {agent.name}")
-        logger.info(
-            f"User: {context.context.username} (Premium: {context.context.premium_user})"
-        )
+        print(f"Agent '{agent.name}' started with {context.context.username}")
 
     async def on_end(
         self,
@@ -317,10 +307,7 @@ class AgentLifecycleHooks(AgentHooks):
         output: Any,
     ) -> None:
         """Called when an agent run completes."""
-        duration = datetime.now() - self.start_time if self.start_time else None
-        logger.info(f"Agent run completed: {agent.name}")
-        logger.info(f"Duration: {duration}")
-        logger.info(f"Tools called: {self.tools_called}")
+        print(f"Agent '{agent.name}' completed")
 
     async def on_tool_start(
         self,
@@ -329,62 +316,120 @@ class AgentLifecycleHooks(AgentHooks):
         tool: Any,
     ) -> None:
         """Called when a tool is invoked."""
-        self.tools_called += 1
-        logger.info(f"Tool called: {tool.name}")
-
+        print(f"Tool '{tool.name}' called by agent '{agent.name}'")
 
 # -----------------------------------------------------------------------------
-# SECTION 5: Guardrails
+# SECTION 4: Guardrails
 # -----------------------------------------------------------------------------
 
 @input_guardrail
-async def calculation_guardrail(
-    context: RunContextWrapper[CustomerContext],
-    agent: Agent[Any],
-    input_text: Union[str, List[Any]],
+async def math_query_guardrail(
+    ctx: RunContextWrapper[CustomerContext],
+    agent: Agent[CustomerContext],
+    input_data: Union[str, List[Any]]
 ) -> GuardrailFunctionOutput:
-    # Define keywords for valid calculation queries
-    calculation_keywords = [
-        "convert",
-        "calculate",
-        "compute",
-        "solve",
-        "math",
-        "constant",
-        "pi",
-        "celsius",
-        "fahrenheit",
-        "kelvin",
-        "meter",
-        "foot",
-        "feet",
-        "inch",
-        "mile",
-        "kilogram",
-        "pound",
-        "ounce",
-    ]
-
-    # Check if any calculation keyword is in the input
-    input_str = input_text if isinstance(input_text, str) else str(input_text)
-    if any(keyword in input_str.lower() for keyword in calculation_keywords):
+    """Guardrail to verify math queries have enough information."""
+    # Create a simple agent for screening math queries
+    math_screener = Agent(
+        name="Math Query Screener",
+        instructions="Determine if the user query is related to math calculations or unit conversions, and if it contains sufficient information to provide a useful response.",
+        model="gpt-3.5-turbo",
+        model_settings=ModelSettings(temperature=0.1),
+        output_type=MathScreenerOutput,
+    )
+    
+    input_str = input_data if isinstance(input_data, str) else str(input_data)
+    result = await Runner.run(math_screener, input_str, context=ctx.context)
+    output = result.final_output_as(MathScreenerOutput)
+    
+    # If it's a math query, check for minimum required info
+    if output.is_math_query and len(input_str.split()) < 4:
         return GuardrailFunctionOutput(
-            output_info="Input contains calculation-related keywords",
-            tripwire_triggered=False,
-        )
-
-    # Minimal query length check
-    if len(input_str.split()) < 3:
-        return GuardrailFunctionOutput(
-            output_info="Please provide a more detailed query for calculation or conversion.",
+            output_info=output,
             tripwire_triggered=True,
         )
-
-    # Default to valid if we're not sure
+    
     return GuardrailFunctionOutput(
-        output_info="Input passed default validation", tripwire_triggered=False
+        output_info=output,
+        tripwire_triggered=False,
     )
 
+
+@output_guardrail
+async def response_quality_guardrail(
+    ctx: RunContextWrapper[CustomerContext],
+    agent: Agent[CustomerContext],
+    output: CustomerResponse
+) -> GuardrailFunctionOutput:
+    """Guardrail to verify response quality and appropriateness."""
+    # Create a simple agent for checking response quality
+    quality_checker = Agent(
+        name="Response Quality Checker",
+        instructions=(
+            "Verify that the customer service response is appropriate, helpful, and accurate. "
+            "Check that calculations are correct if present and that the response addresses "
+            "the user's query completely."
+        ),
+        model="gpt-3.5-turbo",
+        model_settings=ModelSettings(temperature=0.1),
+        output_type=ResponseQualityOutput,
+    )
+    
+    result = await Runner.run(quality_checker, output.answer, context=ctx.context)
+    quality_output = result.final_output_as(ResponseQualityOutput)
+    
+    return GuardrailFunctionOutput(
+        output_info=quality_output,
+        tripwire_triggered=not quality_output.is_appropriate,
+    )
+
+# -----------------------------------------------------------------------------
+# SECTION 5: Dynamic Instructions
+# -----------------------------------------------------------------------------
+
+def calculator_instructions(
+    ctx: RunContextWrapper[CustomerContext], 
+    agent: Agent[CustomerContext]
+) -> str:
+    """Dynamic instructions for the calculator agent."""
+    premium_content = ""
+    if ctx.context.premium_user:
+        premium_content = " As this is a premium user, provide extra detail in your explanations."
+    
+    base_instructions = f"""You are a specialized calculator agent that performs conversions and provides mathematical constants.
+
+Your capabilities include:
+- Temperature conversions (Celsius, Fahrenheit, Kelvin)
+- Length conversions (meters, feet, inches, miles)
+- Math constants (Pi, e, Golden Ratio, etc.)
+
+Always show your work and include appropriate units in your results.{premium_content}
+
+Current user: {ctx.context.username}
+"""
+    return prompt_with_handoff_instructions(base_instructions)
+
+
+def customer_service_instructions(
+    ctx: RunContextWrapper[CustomerContext], 
+    agent: Agent[CustomerContext]
+) -> str:
+    """Dynamic instructions for the customer service agent."""
+    premium_content = ""
+    if ctx.context.premium_user:
+        premium_content = " As this is a premium user, provide priority service with more detailed explanations."
+    
+    base_instructions = f"""You are a helpful customer service assistant who can handle calculation requests.
+
+For math-related questions, you can:
+1. Use built-in conversion tools directly
+2. Use the calculator agent for more complex requests
+
+Always be professional, clear, and concise in your responses.{premium_content}
+
+Current user: {ctx.context.username}
+"""
+    return prompt_with_handoff_instructions(base_instructions)
 
 # -----------------------------------------------------------------------------
 # SECTION 6: Agent Implementations
@@ -393,150 +438,132 @@ async def calculation_guardrail(
 def create_calculator_agent() -> Agent[CustomerContext]:
     """Create the calculator agent."""
     return Agent[CustomerContext](
-        name="Calculator Helper",
-        instructions="""You are a specialized calculator agent that helps with:
-1. Temperature conversions (Celsius, Fahrenheit, Kelvin)
-2. Length conversions (meters, feet, inches, miles)
-3. Weight conversions (kilograms, pounds, ounces)
-4. Math constants (Pi, E, Golden Ratio, etc.)
-
-Always provide precise calculations and include units in your responses.
-If a conversion or calculation isn't possible, clearly explain why.
-For constants, include both the value and a brief explanation of its significance.
-""",
-        model="gpt-4",
+        name="Calculator Agent",
+        handoff_description="Specialized agent for handling complex math calculations and conversions",
+        instructions=calculator_instructions,
+        model="gpt-4o",
         model_settings=ModelSettings(temperature=0.1),
         tools=[
             convert_temperature,
             convert_length,
-            convert_weight,
             get_math_constant,
             get_user_details,
         ],
         hooks=AgentLifecycleHooks(),
-        input_guardrails=[calculation_guardrail],
+        input_guardrails=[InputGuardrail(guardrail_function=math_query_guardrail)],
+        output_type=CalculationResult,
     )
 
 
 def create_customer_service_agent() -> Agent[CustomerContext]:
-    """Create the customer service agent."""
+    """Create the customer service agent with calculator as tool."""
+    # Create the calculator agent
+    calculator_agent = create_calculator_agent()
+    
+    # Create a tool from the calculator agent
+    calculator_tool = calculator_agent.as_tool(
+        tool_name="use_calculator",
+        tool_description="Use the specialized calculator to handle complex math calculations and conversions",
+    )
+    
+    # Create the main customer service agent
     return Agent[CustomerContext](
-        name="Customer Service Assistant",
-        instructions="""You are a helpful customer service assistant who can help with various queries including calculations and conversions.
-
-For calculation and conversion requests, use your calculator tools to provide accurate results.
-Always be polite, clear, and professional when responding to customer inquiries.
-
-When helping customers:
-- Use appropriate units in all conversions
-- Explain mathematical concepts clearly
-- Check if the user is a premium user and provide more detailed responses if they are
-- Be concise but thorough in your explanations
-""",
-        model="gpt-4",
-        model_settings=ModelSettings(temperature=0.7),
+        name="Customer Service Agent",
+        instructions=customer_service_instructions,
+        model="gpt-4o",
+        model_settings=ModelSettings(temperature=0.3),
         tools=[
             convert_temperature,
             convert_length,
-            convert_weight,
             get_math_constant,
             get_user_details,
+            calculator_tool,
         ],
+        output_type=CustomerResponse,
         hooks=AgentLifecycleHooks(),
-        input_guardrails=[calculation_guardrail],
+        input_guardrails=[InputGuardrail(guardrail_function=math_query_guardrail)],
+        output_guardrails=[OutputGuardrail(guardrail_function=response_quality_guardrail)],
+        handoffs=[calculator_agent],
     )
 
-
 # -----------------------------------------------------------------------------
-# SECTION 7: Demo Scenarios
+# SECTION 7: Demo Execution
 # -----------------------------------------------------------------------------
 
-async def run_conversion_inquiry(agent: Agent[CustomerContext]) -> None:
-    """Run a scenario where a customer asks about unit conversions."""
-    context = CustomerContext(customer_id="cust_12345", username="Alice")
-
-    # Temperature conversion inquiry
-    user_message = "I need to convert 100 degrees Celsius to Fahrenheit for my recipe. Can you help me?"
-    print(f"\n=== Temperature Conversion Inquiry ===\nCustomer: {user_message}")
-
+async def run_demo(agent: Agent[CustomerContext], query: str, user_context: CustomerContext) -> None:
+    """Run a demo with the given query and context."""
+    print(f"\n=== New Query ===\nCustomer: {query}")
+    
     try:
-        result = await Runner.run(agent, user_message, context=context)
-        print(f"Agent: {result.final_output}")
+        result = await Runner.run(agent, query, context=user_context)
+        response = result.final_output_as(CustomerResponse)
+        
+        print(f"Agent: {response.answer}")
+        print(f"Sentiment: {response.sentiment}")
+        print(f"Requires escalation: {response.requires_escalation}")
+        
+        if response.calculation_result:
+            print(f"Calculation: {response.calculation_result.result}")
+            if response.calculation_result.units:
+                print(f"Units: {response.calculation_result.units}")
+            print(f"Explanation: {response.calculation_result.explanation}")
+    
+    except InputGuardrailTripwireTriggered as e:
+        print(f"Input guardrail triggered: Please provide more information for your calculation request.")
+    except OutputGuardrailTripwireTriggered as e:
+        print(f"Output guardrail triggered: Response did not meet quality standards.")
     except Exception as e:
         print(f"Error: {e}")
 
-    # Length conversion inquiry
-    user_message = "How many feet are in 10 meters? I'm trying to figure out if my new couch will fit in my living room."
-    print(f"\n=== Length Conversion Inquiry ===\nCustomer: {user_message}")
-
-    try:
-        result = await Runner.run(agent, user_message, context=context)
-        print(f"Agent: {result.final_output}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-
-async def run_constant_inquiry(agent: Agent[CustomerContext]) -> None:
-    """Run a scenario where a customer asks about mathematical constants."""
-    context = CustomerContext(customer_id="cust_67890", username="Bob")
-
-    # Math constant inquiry
-    user_message = "I'm working on a math project and need the value of Pi. Can you tell me what it is and why it's important?"
-    print(f"\n=== Mathematical Constant Inquiry ===\nCustomer: {user_message}")
-
-    try:
-        result = await Runner.run(agent, user_message, context=context)
-        print(f"Agent: {result.final_output}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-    # Multiple constants inquiry
-    user_message = "Can you tell me about the golden ratio and how it relates to the Fibonacci sequence? Also, what is Avogadro's number used for?"
-    print(f"\n=== Multiple Constants Inquiry ===\nCustomer: {user_message}")
-
-    try:
-        result = await Runner.run(agent, user_message, context=context)
-        print(f"Agent: {result.final_output}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-
-async def run_mixed_inquiry(agent: Agent[CustomerContext]) -> None:
-    """Run a scenario with mixed inquiries about conversions and constants."""
-    context = CustomerContext(customer_id="cust_54321", username="Charlie", premium_user=True)
-
-    user_message = """I'm working on a physics project and need some help:
-    1. What is Planck's constant and why is it significant?
-    2. I need to convert 212°F to Kelvin for my experiment.
-    3. Also, how many kilograms are in 150 pounds?
-    Thanks for your help!"""
-
-    print(f"\n=== Mixed Inquiry (Premium User) ===\nCustomer: {user_message}")
-
-    try:
-        result = await Runner.run(agent, user_message, context=context)
-        print(f"Agent: {result.final_output}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-
-# -----------------------------------------------------------------------------
-# SECTION 8: Main Execution
-# -----------------------------------------------------------------------------
 
 async def main() -> None:
     """Main execution function."""
-    print("=== Math-Enabled Customer Service Agent Demo ===")
-
-    # Create the agents
-    calculator_agent = create_calculator_agent()
+    # Enable or disable tracing as needed
+    # set_tracing_disabled(False)  # Enable for debugging/monitoring
+    
+    print("=== Combined Agents Demo ===")
+    
+    # Create the customer service agent (which includes the calculator agent)
     customer_service_agent = create_customer_service_agent()
-
-    # Run demonstration scenarios with the customer service agent
-    await run_conversion_inquiry(customer_service_agent)
-    await run_constant_inquiry(customer_service_agent)
-    await run_mixed_inquiry(customer_service_agent)
-
+    
+    # Create user contexts
+    regular_user = CustomerContext(
+        customer_id="user123",
+        username="Alice",
+        premium_user=False
+    )
+    
+    premium_user = CustomerContext(
+        customer_id="premium456",
+        username="Bob",
+        premium_user=True
+    )
+    
+    # Run demonstration scenarios
+    await run_demo(
+        customer_service_agent,
+        "Can you convert 30 degrees Celsius to Fahrenheit?",
+        regular_user
+    )
+    
+    await run_demo(
+        customer_service_agent,
+        "What is the value of Pi and why is it important in mathematics?",
+        regular_user
+    )
+    
+    await run_demo(
+        customer_service_agent,
+        "I need to convert 5 meters to feet for my home renovation project.",
+        premium_user
+    )
+    
+    await run_demo(
+        customer_service_agent,
+        "Can you help me with these conversions: 100°F to Celsius, 10 miles to kilometers, and what is the golden ratio?",
+        premium_user
+    )
+    
     print("\n=== Demo Complete ===")
 
 
