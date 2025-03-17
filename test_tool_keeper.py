@@ -4,8 +4,8 @@
 Tool Keeper Demo
 ===============
 
-This script demonstrates the usage of the ToolKeeper agent for validating,
-analyzing, and documenting tool definitions.
+This script demonstrates the ToolKeeper agent which analyzes, validates,
+and generates documentation for tool definitions.
 
 To run:
     python test_tool_keeper.py
@@ -13,119 +13,46 @@ To run:
 
 import asyncio
 import json
-from typing import Dict, Any
-
-from tool_keeper import ToolKeeper
+from tool_keeper import ToolKeeper, EXAMPLE_TOOL
 
 
-async def test_tool_analysis(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
-    """Test the tool analysis functionality.
+async def demo_tool_analysis(tool_keeper, tool_definition):
+    """Demo the tool analysis functionality."""
+    print("\n=== Tool Analysis ===")
     
-    Args:
-        tool_keeper: The ToolKeeper instance
-        tool_def: The tool definition to analyze
-    """
-    print("\n=== Testing Tool Analysis ===")
-    print(f"Analyzing tool: {tool_def['name']}")
+    result = await tool_keeper.run(
+        f"Analyze this tool definition in detail and recommend improvements: ```{json.dumps(tool_definition, indent=2)}```"
+    )
     
-    # Use the agent for analysis
-    print("\nRunning analysis...")
-    analysis = await tool_keeper.analyze_tool_directly(json.dumps(tool_def))
-    print("Analysis Result:")
-    print(json.dumps(analysis, indent=2))
-    
-    # Get general feedback using the main agent
-    print("\nGetting general feedback...")
-    result = await tool_keeper.run(f"Provide feedback on this tool definition: {json.dumps(tool_def)}")
-    print("\nGeneral Feedback:")
     print(result)
 
 
-async def test_tool_validation(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
-    """Test the tool validation functionality.
+async def demo_tool_validation(tool_keeper, tool_definition):
+    """Demo the tool validation functionality."""
+    print("\n=== Tool Validation ===")
     
-    Args:
-        tool_keeper: The ToolKeeper instance
-        tool_def: The tool definition to validate
-    """
-    print("\n=== Testing Tool Validation ===")
-    print(f"Validating tool: {tool_def['name']}")
+    result = await tool_keeper.run(
+        f"Validate this tool definition against OpenAI Agents SDK requirements: ```{json.dumps(tool_definition, indent=2)}```"
+    )
     
-    # Run validation
-    validation = await tool_keeper.validate_tool_directly(json.dumps(tool_def))
-    print("\nValidation Result:")
-    print(json.dumps(validation, indent=2))
-
-
-async def test_tool_documentation(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
-    """Test the tool documentation functionality.
-    
-    Args:
-        tool_keeper: The ToolKeeper instance
-        tool_def: The tool definition to document
-    """
-    print("\n=== Testing Tool Documentation ===")
-    print(f"Generating documentation for tool: {tool_def['name']}")
-    
-    # Generate documentation
-    docs = await tool_keeper.document_tool_directly(json.dumps(tool_def))
-    print("\nGenerated Documentation:")
-    print(docs)
-
-
-async def test_improvement_suggestions(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
-    """Test the improvement suggestions functionality.
-    
-    Args:
-        tool_keeper: The ToolKeeper instance
-        tool_def: The tool definition to improve
-    """
-    print("\n=== Testing Improvement Suggestions ===")
-    print(f"Getting improvement suggestions for tool: {tool_def['name']}")
-    
-    # Ask for specific improvement suggestions
-    prompt = f"""
-    Please suggest improvements for this tool definition to make it follow OpenAI Agents SDK best practices:
-    
-    ```json
-    {json.dumps(tool_def, indent=2)}
-    ```
-    
-    Focus on:
-    1. Error handling
-    2. Documentation quality
-    3. Parameter typing
-    4. SDK integration
-    """
-    
-    result = await tool_keeper.run(prompt)
-    print("\nImprovement Suggestions:")
     print(result)
 
 
-async def main():
-    """Main test function."""
-    print("=== Starting Tool Keeper Demo ===")
+async def demo_tool_documentation(tool_keeper, tool_definition):
+    """Demo the tool documentation generation."""
+    print("\n=== Tool Documentation ===")
     
-    # Create the Tool Keeper instance
-    tool_keeper = ToolKeeper()
+    result = await tool_keeper.run(
+        f"Generate comprehensive documentation for this tool: ```{json.dumps(tool_definition, indent=2)}```"
+    )
     
-    # Example tool definitions
-    browser_tool = {
-        "name": "goto",
-        "description": "Navigate to a specific URL",
-        "parameters": {
-            "url": {
-                "type": "string",
-                "description": "The URL to navigate to"
-            }
-        },
-        "function": "computer.goto"
-    }
-    
-    # Incomplete tool to test validation
+    print(result)
+
+
+async def demo_with_incomplete_tool(tool_keeper):
+    """Demo with an incomplete tool definition."""
     incomplete_tool = {
-        "name": "search",
+        "name": "search_web",
         "parameters": {
             "query": {
                 "type": "string"
@@ -133,18 +60,57 @@ async def main():
         }
     }
     
-    # Run tests with the complete tool
-    await test_tool_analysis(tool_keeper, browser_tool)
-    await test_tool_validation(tool_keeper, browser_tool)
-    await test_tool_documentation(tool_keeper, browser_tool)
-    await test_improvement_suggestions(tool_keeper, browser_tool)
+    print("\n=== Analyzing Incomplete Tool ===")
+    result = await tool_keeper.run(
+        f"Analyze this incomplete tool definition and provide specific improvement suggestions: ```{json.dumps(incomplete_tool, indent=2)}```"
+    )
+    print(result)
+
+
+async def main():
+    """Main demo function."""
+    # Create the Tool Keeper with the default model
+    tool_keeper = ToolKeeper()
     
-    # Run tests with the incomplete tool
-    print("\n\n=== Testing with Incomplete Tool ===")
-    await test_tool_validation(tool_keeper, incomplete_tool)
-    await test_improvement_suggestions(tool_keeper, incomplete_tool)
+    print("=== Tool Keeper Demo ===")
+    print("This agent analyzes, validates, and documents tool definitions")
     
-    print("\n=== Tool Keeper Demo Completed ===")
+    # Example tool definition
+    browser_tool = {
+        "name": "goto_url",
+        "description": "Navigate to a specific URL in the browser",
+        "parameters": {
+            "url": {
+                "type": "string",
+                "description": "The URL to navigate to"
+            },
+            "new_tab": {
+                "type": "boolean",
+                "description": "Whether to open the URL in a new tab",
+                "required": False
+            }
+        }
+    }
+    
+    # Run demos with the various functionalities
+    await demo_tool_analysis(tool_keeper, browser_tool)
+    await demo_tool_validation(tool_keeper, browser_tool)
+    await demo_tool_documentation(tool_keeper, browser_tool)
+    
+    # Demo with incomplete tool
+    await demo_with_incomplete_tool(tool_keeper)
+    
+    # Demo with the example tool from the module
+    print("\n=== Using Built-in Example Tool ===")
+    print(f"Example tool: {json.dumps(EXAMPLE_TOOL, indent=2)}")
+    
+    result = await tool_keeper.run(
+        "Create a Python function implementation for the built-in example tool"
+    )
+    print("\nGenerated Implementation:")
+    print(result)
+    
+    print("\n=== Demo Complete ===")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 Tool Keeper Unit Tests
 =====================
 
-Unit tests for the ToolKeeper class using pytest.
+Unit tests for the ToolKeeper class and its function tools.
 
 To run:
     uv run pytest tests/test_tool_keeper_unit.py -v
@@ -15,7 +15,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Dict, Any
 
-from tool_keeper import ToolKeeper, ValidationResult, AnalysisResult
+from tool_keeper import ToolKeeper, analyze_tool, validate_tool, document_tool
 
 
 @pytest.fixture
@@ -58,176 +58,133 @@ def tool_keeper() -> ToolKeeper:
     return ToolKeeper()
 
 
-@pytest.fixture
-def mock_runner_result():
-    """Fixture providing a mock runner result."""
-    mock_result = MagicMock()
-    mock_result.final_output = json.dumps({
-        "schema_check": "Valid",
-        "docstring_check": "Present",
-        "error_handling": "Missing",
-        "recommendations": ["Implement error handling with failure_error_function"]
-    })
-    return mock_result
-
-
-class TestToolKeeperUnit:
-    """Unit tests for the ToolKeeper class."""
+class TestToolFunctions:
+    """Test the individual tool functions directly."""
 
     @pytest.mark.asyncio
-    async def test_validate_tool_valid(self, tool_keeper: ToolKeeper, valid_tool: Dict[str, Any], mock_runner_result) -> None:
-        """Test validation with a valid tool."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock
-            mock_runner_result.final_output = json.dumps({
-                "is_valid": True,
-                "errors": [],
-                "warnings": []
-            })
-            mock_runner.run = AsyncMock(return_value=mock_runner_result)
-            
-            # Call the method
-            result = await tool_keeper.validate_tool_directly(json.dumps(valid_tool))
-            
-            # Verify results
-            assert result["is_valid"] is True
-            assert not result["errors"]
-            
-            # Verify that Runner.run was called
-            mock_runner.run.assert_called_once()
+    async def test_analyze_tool_valid(self, valid_tool: Dict[str, Any]) -> None:
+        """Test analyzing a valid tool definition."""
+        ctx_mock = MagicMock()
+        
+        result = await analyze_tool(ctx_mock, json.dumps(valid_tool))
+        result_dict = json.loads(result)
+        
+        assert "schema_check" in result_dict
+        assert result_dict["schema_check"] == "Valid"
+        assert "docstring_check" in result_dict
+        assert "error_handling" in result_dict
+        assert "recommendations" in result_dict
 
     @pytest.mark.asyncio
-    async def test_validate_tool_invalid(self, tool_keeper: ToolKeeper, invalid_tool: Dict[str, Any], mock_runner_result) -> None:
-        """Test validation with an invalid tool."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock
-            mock_runner_result.final_output = json.dumps({
-                "is_valid": False,
-                "errors": ["Missing required field: description"],
-                "warnings": ["Parameter 'query' is missing description"]
-            })
-            mock_runner.run = AsyncMock(return_value=mock_runner_result)
-            
-            # Call the method
-            result = await tool_keeper.validate_tool_directly(json.dumps(invalid_tool))
-            
-            # Verify results
-            assert result["is_valid"] is False
-            assert len(result["errors"]) > 0
-            assert "description" in result["errors"][0]
-            
-            # Verify that Runner.run was called
-            mock_runner.run.assert_called_once()
+    async def test_analyze_tool_invalid(self, invalid_tool: Dict[str, Any]) -> None:
+        """Test analyzing an invalid tool definition."""
+        ctx_mock = MagicMock()
+        
+        result = await analyze_tool(ctx_mock, json.dumps(invalid_tool))
+        result_dict = json.loads(result)
+        
+        assert "schema_check" in result_dict
+        assert result_dict["schema_check"] == "Invalid"
+        assert len(result_dict["recommendations"]) > 0
 
     @pytest.mark.asyncio
-    async def test_analyze_tool(self, tool_keeper: ToolKeeper, valid_tool: Dict[str, Any], mock_runner_result) -> None:
-        """Test tool analysis functionality."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock
-            mock_runner.run = AsyncMock(return_value=mock_runner_result)
-            
-            # Call the method
-            result = await tool_keeper.analyze_tool_directly(json.dumps(valid_tool))
-            
-            # Verify results
-            assert "schema_check" in result
-            assert "docstring_check" in result
-            assert "error_handling" in result
-            assert "recommendations" in result
-            
-            # Verify that Runner.run was called
-            mock_runner.run.assert_called_once()
+    async def test_validate_tool_valid(self, valid_tool: Dict[str, Any]) -> None:
+        """Test validating a valid tool definition."""
+        ctx_mock = MagicMock()
+        
+        result = await validate_tool(ctx_mock, json.dumps(valid_tool))
+        result_dict = json.loads(result)
+        
+        assert "is_valid" in result_dict
+        assert result_dict["is_valid"] is True
+        assert "errors" in result_dict
+        assert len(result_dict["errors"]) == 0
 
     @pytest.mark.asyncio
-    async def test_document_tool(self, tool_keeper: ToolKeeper, valid_tool: Dict[str, Any]) -> None:
-        """Test documentation generation."""
+    async def test_validate_tool_invalid(self, invalid_tool: Dict[str, Any]) -> None:
+        """Test validating an invalid tool definition."""
+        ctx_mock = MagicMock()
+        
+        result = await validate_tool(ctx_mock, json.dumps(invalid_tool))
+        result_dict = json.loads(result)
+        
+        assert "is_valid" in result_dict
+        assert result_dict["is_valid"] is False
+        assert "errors" in result_dict
+        assert len(result_dict["errors"]) > 0
+        assert "description" in "".join(result_dict["errors"])
+
+    @pytest.mark.asyncio
+    async def test_document_tool(self, valid_tool: Dict[str, Any]) -> None:
+        """Test documenting a tool definition."""
+        ctx_mock = MagicMock()
+        
+        result = await document_tool(ctx_mock, json.dumps(valid_tool))
+        
+        assert valid_tool["name"] in result
+        assert valid_tool["description"] in result
+        assert "Parameters" in result
+        assert "Usage Example" in result
+        
+        # Verify each parameter is documented
+        for param_name in valid_tool["parameters"]:
+            assert param_name in result
+    
+    @pytest.mark.asyncio
+    async def test_error_handling(self) -> None:
+        """Test error handling in tool functions."""
+        ctx_mock = MagicMock()
+        invalid_json = "{name: 'invalid json'}"
+        
+        # Test analyze_tool
+        result = await analyze_tool(ctx_mock, invalid_json)
+        result_dict = json.loads(result)
+        assert "error" in result_dict
+        assert "Invalid JSON format" in result_dict["error"]
+        
+        # Test validate_tool
+        result = await validate_tool(ctx_mock, invalid_json)
+        result_dict = json.loads(result)
+        assert "is_valid" in result_dict
+        assert result_dict["is_valid"] is False
+        assert "Invalid JSON format" in "".join(result_dict["errors"])
+        
+        # Test document_tool
+        result = await document_tool(ctx_mock, invalid_json)
+        assert "Error" in result
+
+
+class TestToolKeeper:
+    """Test the ToolKeeper class."""
+
+    @pytest.mark.asyncio
+    async def test_run_method(self, tool_keeper: ToolKeeper) -> None:
+        """Test the run method of ToolKeeper."""
         with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock
             mock_result = MagicMock()
-            mock_result.final_output = f"# {valid_tool['name']}\n\n{valid_tool['description']}"
+            mock_result.final_output = "Analysis complete!"
             mock_runner.run = AsyncMock(return_value=mock_result)
             
-            # Call the method
-            result = await tool_keeper.document_tool_directly(json.dumps(valid_tool))
-            
-            # Verify results
-            assert valid_tool["name"] in result
-            assert valid_tool["description"] in result
-            
-            # Verify that Runner.run was called
-            mock_runner.run.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_json_extraction(self, tool_keeper: ToolKeeper, valid_tool: Dict[str, Any]) -> None:
-        """Test JSON extraction from agent responses."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock - agent response with text before and after JSON
-            mock_result = MagicMock()
-            mock_result.final_output = f"""
-            Here is the analysis of the tool:
-            
-            {json.dumps({
-                "schema_check": "Valid",
-                "docstring_check": "Present",
-                "error_handling": "Missing",
-                "recommendations": ["Add error handling"]
-            })}
-            
-            Let me know if you need anything else!
-            """
-            mock_runner.run = AsyncMock(return_value=mock_result)
-            
-            # Call the method
-            result = await tool_keeper.analyze_tool_directly(json.dumps(valid_tool))
-            
-            # Verify JSON was correctly extracted
-            assert "schema_check" in result
-            assert result["schema_check"] == "Valid"
-            assert "recommendations" in result
-            assert "Add error handling" in result["recommendations"]
-
-    @pytest.mark.asyncio
-    async def test_fallback_to_direct_call(self, tool_keeper: ToolKeeper, valid_tool: Dict[str, Any]) -> None:
-        """Test fallback to direct tool call when JSON extraction fails."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock - agent response with no JSON
-            mock_result = MagicMock()
-            mock_result.final_output = "I've analyzed the tool but couldn't format the output as JSON."
-            mock_runner.run = AsyncMock(return_value=mock_result)
-            
-            # Set up the direct tool call mock
-            with patch.object(tool_keeper, '_analyze_tool') as mock_analyze:
-                mock_analyze.return_value = json.dumps({
-                    "schema_check": "Valid",
-                    "docstring_check": "Present",
-                    "error_handling": "Missing",
-                    "recommendations": []
-                })
-                
-                # Call the method
-                result = await tool_keeper.analyze_tool_directly(json.dumps(valid_tool))
-                
-                # Verify direct tool call was used
-                assert "schema_check" in result
-                mock_analyze.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_main_agent_run(self, tool_keeper: ToolKeeper) -> None:
-        """Test the main agent run method."""
-        with patch("tool_keeper.Runner") as mock_runner:
-            # Set up the mock
-            mock_result = MagicMock()
-            mock_result.final_output = "Analysis complete: The tool looks good!"
-            mock_runner.run = AsyncMock(return_value=mock_result)
-            
-            # Call the method
             result = await tool_keeper.run("Analyze this tool")
             
-            # Verify results
-            assert result == "Analysis complete: The tool looks good!"
+            # Verify Runner.run was called with the right agent
+            mock_runner.run.assert_called_once_with(tool_keeper.agent, "Analyze this tool", context=None)
+            assert result == "Analysis complete!"
+    
+    @pytest.mark.asyncio
+    async def test_run_with_context(self, tool_keeper: ToolKeeper) -> None:
+        """Test running with custom context."""
+        with patch("tool_keeper.Runner") as mock_runner:
+            mock_result = MagicMock()
+            mock_result.final_output = "Analysis with context!"
+            mock_runner.run = AsyncMock(return_value=mock_result)
             
-            # Verify that Runner.run was called with the main agent
-            mock_runner.run.assert_called_once_with(tool_keeper.agent, "Analyze this tool")
+            custom_context = {"user_id": "123", "settings": {"verbose": True}}
+            result = await tool_keeper.run("Analyze this tool", context=custom_context)
+            
+            # Verify context was passed to Runner.run
+            mock_runner.run.assert_called_once_with(tool_keeper.agent, "Analyze this tool", context=custom_context)
+            assert result == "Analysis with context!"
 
 
 if __name__ == "__main__":
