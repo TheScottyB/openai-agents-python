@@ -61,7 +61,15 @@ logger = logging.getLogger("combined_agents")
 
 @dataclass
 class AgentContext:
-    """Custom context with user information and history."""
+    """
+    Custom context with user information and history.
+
+    Attributes:
+        user_id (str): The unique identifier for the user.
+        username (str): The username of the user.
+        is_premium (bool): Indicates if the user has a premium account.
+        conversation_history (List[Dict[str, Any]]): The history of interactions in the conversation.
+    """
 
     user_id: str
     username: str
@@ -264,7 +272,9 @@ def convert_weight(
 
 
 @function_tool
-def get_math_constant(context: RunContextWrapper[AgentContext], name: str) -> Dict[str, Any]:
+def get_math_constant(
+    context: RunContextWrapper[AgentContext], name: str
+) -> Dict[str, Any]:
     """Get information about a mathematical constant."""
     try:
         math_constants = MathConstant()
@@ -323,7 +333,10 @@ class AgentLifecycleHooks(AgentHooks):
         )
 
     async def on_end(
-        self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], output: Any
+        self,
+        context: RunContextWrapper[AgentContext],
+        agent: Agent[AgentContext],
+        output: Any,
     ) -> None:
         """Called when an agent run completes."""
         duration = datetime.now() - self.start_time if self.start_time else None
@@ -332,7 +345,10 @@ class AgentLifecycleHooks(AgentHooks):
         logger.info(f"Tools called: {self.tools_called}")
 
     async def on_tool_start(
-        self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Any
+        self,
+        context: RunContextWrapper[AgentContext],
+        agent: Agent[AgentContext],
+        tool: Any,
     ) -> None:
         """Called when a tool is invoked."""
         self.tools_called += 1
@@ -348,14 +364,28 @@ class AgentLifecycleHooks(AgentHooks):
 async def calculation_guardrail(
     context: RunContextWrapper[AgentContext],
     agent: Agent[Any],
-    input_text: str | list[TResponseInputItem]
+    input_text: Union[str, List[Any]],
 ) -> GuardrailFunctionOutput:
     # Define keywords for valid calculation queries
     calculation_keywords = [
-        "convert", "calculate", "compute", "solve", "math",
-        "constant", "pi", "celsius", "fahrenheit", "kelvin",
-        "meter", "foot", "feet", "inch", "mile",
-        "kilogram", "pound", "ounce",
+        "convert",
+        "calculate",
+        "compute",
+        "solve",
+        "math",
+        "constant",
+        "pi",
+        "celsius",
+        "fahrenheit",
+        "kelvin",
+        "meter",
+        "foot",
+        "feet",
+        "inch",
+        "mile",
+        "kilogram",
+        "pound",
+        "ounce",
     ]
 
     # Check if any calculation keyword is in the input
@@ -363,28 +393,25 @@ async def calculation_guardrail(
     if any(keyword in input_str.lower() for keyword in calculation_keywords):
         return GuardrailFunctionOutput(
             output_info="Input contains calculation-related keywords",
-            tripwire_triggered=False
+            tripwire_triggered=False,
         )
 
     # Minimal query length check
     if len(input_str.split()) < 3:
         return GuardrailFunctionOutput(
             output_info="Please provide a more detailed query for calculation or conversion.",
-            tripwire_triggered=True
+            tripwire_triggered=True,
         )
 
     # Default to valid if we're not sure
     return GuardrailFunctionOutput(
-        output_info="Input passed default validation",
-        tripwire_triggered=False
+        output_info="Input passed default validation", tripwire_triggered=False
     )
 
 
 @output_guardrail
 async def response_format_guardrail(
-    context: RunContextWrapper[AgentContext],
-    agent: Agent[Any],
-    agent_output: Any
+    context: RunContextWrapper[AgentContext], agent: Agent[Any], agent_output: Any
 ) -> GuardrailFunctionOutput:
     # For conversion results, ensure they include unit information
     output_text = str(agent_output)
@@ -392,20 +419,26 @@ async def response_format_guardrail(
 
     if any(keyword in output_text.lower() for keyword in conversion_keywords):
         unit_keywords = [
-            "celsius", "fahrenheit", "kelvin",
-            "meters", "feet", "inches", "miles",
-            "kilograms", "pounds", "ounces",
+            "celsius",
+            "fahrenheit",
+            "kelvin",
+            "meters",
+            "feet",
+            "inches",
+            "miles",
+            "kilograms",
+            "pounds",
+            "ounces",
         ]
 
         if not any(unit in output_text.lower() for unit in unit_keywords):
             return GuardrailFunctionOutput(
                 output_info="Please include the units in your response for clarity.",
-                tripwire_triggered=True
+                tripwire_triggered=True,
             )
 
     return GuardrailFunctionOutput(
-        output_info="Output format validation passed",
-        tripwire_triggered=False
+        output_info="Output format validation passed", tripwire_triggered=False
     )
 
 
