@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 """
-Tool Keeper Test
+Tool Keeper Demo
 ===============
 
-Tests for the ToolKeeper class which validates, analyzes, and documents
-tool definitions for the OpenAI Agents SDK.
+This script demonstrates the usage of the ToolKeeper agent for validating,
+analyzing, and documenting tool definitions.
 
-To run this test:
+To run:
     python test_tool_keeper.py
 """
 
@@ -28,14 +28,16 @@ async def test_tool_analysis(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) 
     print("\n=== Testing Tool Analysis ===")
     print(f"Analyzing tool: {tool_def['name']}")
     
-    # Direct method approach
+    # Use the agent for analysis
+    print("\nRunning analysis...")
     analysis = await tool_keeper.analyze_tool_directly(json.dumps(tool_def))
-    print("\nDirect Analysis Result:")
+    print("Analysis Result:")
     print(json.dumps(analysis, indent=2))
     
-    # Agent-based approach
-    result = await tool_keeper.run(f"Please analyze this tool definition: {json.dumps(tool_def)}")
-    print("\nAgent Analysis Result:")
+    # Get general feedback using the main agent
+    print("\nGetting general feedback...")
+    result = await tool_keeper.run(f"Provide feedback on this tool definition: {json.dumps(tool_def)}")
+    print("\nGeneral Feedback:")
     print(result)
 
 
@@ -49,15 +51,10 @@ async def test_tool_validation(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]
     print("\n=== Testing Tool Validation ===")
     print(f"Validating tool: {tool_def['name']}")
     
-    # Direct method approach
+    # Run validation
     validation = await tool_keeper.validate_tool_directly(json.dumps(tool_def))
-    print("\nDirect Validation Result:")
+    print("\nValidation Result:")
     print(json.dumps(validation, indent=2))
-    
-    # Agent-based approach
-    result = await tool_keeper.run(f"Please validate this tool definition: {json.dumps(tool_def)}")
-    print("\nAgent Validation Result:")
-    print(result)
 
 
 async def test_tool_documentation(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
@@ -70,37 +67,45 @@ async def test_tool_documentation(tool_keeper: ToolKeeper, tool_def: Dict[str, A
     print("\n=== Testing Tool Documentation ===")
     print(f"Generating documentation for tool: {tool_def['name']}")
     
-    # Direct method approach
-    docs = await tool_keeper.document_tool(None, json.dumps(tool_def))
+    # Generate documentation
+    docs = await tool_keeper.document_tool_directly(json.dumps(tool_def))
     print("\nGenerated Documentation:")
     print(docs)
-    
-    # Agent-based approach (shortened for brevity)
-    result = await tool_keeper.run(f"Generate documentation for this tool: {json.dumps(tool_def)}")
-    print("\nAgent Documentation (Preview):")
-    print(result[:200] + "..." if len(result) > 200 else result)
 
 
-async def test_tool_improvement(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
-    """Test the tool improvement suggestions functionality.
+async def test_improvement_suggestions(tool_keeper: ToolKeeper, tool_def: Dict[str, Any]) -> None:
+    """Test the improvement suggestions functionality.
     
     Args:
         tool_keeper: The ToolKeeper instance
         tool_def: The tool definition to improve
     """
-    print("\n=== Testing Tool Improvement Suggestions ===")
+    print("\n=== Testing Improvement Suggestions ===")
     print(f"Getting improvement suggestions for tool: {tool_def['name']}")
     
-    result = await tool_keeper.run(
-        f"Please suggest improvements for this tool definition: {json.dumps(tool_def)}"
-    )
+    # Ask for specific improvement suggestions
+    prompt = f"""
+    Please suggest improvements for this tool definition to make it follow OpenAI Agents SDK best practices:
+    
+    ```json
+    {json.dumps(tool_def, indent=2)}
+    ```
+    
+    Focus on:
+    1. Error handling
+    2. Documentation quality
+    3. Parameter typing
+    4. SDK integration
+    """
+    
+    result = await tool_keeper.run(prompt)
     print("\nImprovement Suggestions:")
     print(result)
 
 
 async def main():
     """Main test function."""
-    print("Starting Tool Keeper Tests")
+    print("=== Starting Tool Keeper Demo ===")
     
     # Create the Tool Keeper instance
     tool_keeper = ToolKeeper()
@@ -128,17 +133,18 @@ async def main():
         }
     }
     
-    # Run tests
+    # Run tests with the complete tool
     await test_tool_analysis(tool_keeper, browser_tool)
     await test_tool_validation(tool_keeper, browser_tool)
     await test_tool_documentation(tool_keeper, browser_tool)
-    await test_tool_improvement(tool_keeper, browser_tool)
+    await test_improvement_suggestions(tool_keeper, browser_tool)
     
-    # Test with incomplete tool
+    # Run tests with the incomplete tool
     print("\n\n=== Testing with Incomplete Tool ===")
     await test_tool_validation(tool_keeper, incomplete_tool)
+    await test_improvement_suggestions(tool_keeper, incomplete_tool)
     
-    print("\nAll tests completed!")
+    print("\n=== Tool Keeper Demo Completed ===")
 
 
 if __name__ == "__main__":

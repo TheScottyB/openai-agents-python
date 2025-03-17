@@ -19,11 +19,8 @@ Usage:
     # Create a Tool Keeper instance
     tool_keeper = ToolKeeper()
     
-    # Get analysis for a tool
-    result = await tool_keeper.analyze_tool(tool_json_str)
-    
-    # Or use the agent directly
-    response = await tool_keeper.run("Analyze this tool: {tool_json}")
+    # Run the agent with a tool analysis request
+    result = await tool_keeper.run("Analyze this tool: {tool_json}")
 """
 
 import json
@@ -109,18 +106,47 @@ class ToolKeeper:
             3. Reference relevant documentation from the OpenAI Agents SDK
             4. Consider error handling and edge cases
             5. Focus on maintainability and clarity
+            
+            Always use your tools to perform the core operations of analyzing, validating and documenting tools.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.2),
             tools=[
-                self.analyze_tool,
-                self.validate_tool,
-                self.document_tool,
+                self._analyze_tool,
+                self._validate_tool,
+                self._document_tool,
             ]
+        )
+        
+        # Analysis agent for direct method access
+        self.analysis_agent = Agent(
+            name="Analysis Agent",
+            instructions="Analyze the given tool definition for improvements based on OpenAI Agents SDK best practices.",
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.1),
+            tools=[self._analyze_tool]
+        )
+        
+        # Validation agent for direct method access
+        self.validation_agent = Agent(
+            name="Validation Agent",
+            instructions="Validate the given tool definition against SDK requirements.",
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.1),
+            tools=[self._validate_tool]
+        )
+        
+        # Documentation agent for direct method access
+        self.documentation_agent = Agent(
+            name="Documentation Agent",
+            instructions="Generate proper documentation for the given tool definition.",
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.1),
+            tools=[self._document_tool]
         )
 
     @function_tool(use_docstring_info=True)
-    async def analyze_tool(self, ctx: Optional[RunContextWrapper] = None, tool_definition: str = "") -> str:
+    async def _analyze_tool(self, ctx: RunContextWrapper, tool_definition: str) -> str:
         """Analyze a tool definition for improvements and best practices.
         
         Args:
@@ -172,7 +198,7 @@ class ToolKeeper:
             }, indent=2)
 
     @function_tool(use_docstring_info=True)
-    async def validate_tool(self, ctx: Optional[RunContextWrapper] = None, tool_definition: str = "") -> str:
+    async def _validate_tool(self, ctx: RunContextWrapper, tool_definition: str) -> str:
         """Validate a tool definition against SDK requirements.
         
         Args:
@@ -239,7 +265,7 @@ class ToolKeeper:
             }, indent=2)
 
     @function_tool(use_docstring_info=True)
-    async def document_tool(self, ctx: Optional[RunContextWrapper] = None, tool_definition: str = "") -> str:
+    async def _document_tool(self, ctx: RunContextWrapper, tool_definition: str) -> str:
         """Generate proper documentation for a tool in markdown format.
         
         Args:
@@ -278,7 +304,7 @@ class ToolKeeper:
             doc += f"async def {tool_name.lower().replace(' ', '_')}("
             
             # Add parameters to example
-            params = ["self"]
+            params = ["self", "ctx: RunContextWrapper"]
             for param_name, param_info in parameters.items():
                 param_type = param_info.get("type", "Any")
                 python_type = {
@@ -329,7 +355,7 @@ class ToolKeeper:
         return result.final_output
     
     async def analyze_tool_directly(self, tool_definition: str) -> Dict[str, Any]:
-        """Analyze a tool definition directly without using the agent.
+        """Analyze a tool definition directly using a dedicated agent.
         
         Args:
             tool_definition: The tool definition as a JSON string
@@ -337,11 +363,35 @@ class ToolKeeper:
         Returns:
             The analysis results as a dictionary
         """
-        json_result = await self.analyze_tool(None, tool_definition)
-        return json.loads(json_result)
+        # Run the analysis through the agent loop
+        result = await Runner.run(
+            self.analysis_agent, 
+            f"Analyze this tool definition and return the results in JSON format: {tool_definition}"
+        )
+        
+        # Extract the JSON from the response
+        try:
+            # Find JSON in the response
+            response_text = result.final_output
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                return json.loads(json_str)
+            else:
+                # If no JSON found, try direct tool call
+                context_wrapper = RunContextWrapper(None)
+                direct_result = await self._analyze_tool(context_wrapper, tool_definition)
+                return json.loads(direct_result)
+        except Exception:
+            # Fallback to direct tool call if JSON extraction fails
+            context_wrapper = RunContextWrapper(None)
+            direct_result = await self._analyze_tool(context_wrapper, tool_definition)
+            return json.loads(direct_result)
     
     async def validate_tool_directly(self, tool_definition: str) -> Dict[str, Any]:
-        """Validate a tool definition directly without using the agent.
+        """Validate a tool definition directly using a dedicated agent.
         
         Args:
             tool_definition: The tool definition as a JSON string
@@ -349,8 +399,49 @@ class ToolKeeper:
         Returns:
             The validation results as a dictionary
         """
-        json_result = await self.validate_tool(None, tool_definition)
-        return json.loads(json_result)
+        # Run the validation through the agent loop
+        result = await Runner.run(
+            self.validation_agent, 
+            f"Validate this tool definition and return the results in JSON format: {tool_definition}"
+        )
+        
+        # Extract the JSON from the response
+        try:
+            # Find JSON in the response
+            response_text = result.final_output
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                return json.loads(json_str)
+            else:
+                # If no JSON found, try direct tool call
+                context_wrapper = RunContextWrapper(None)
+                direct_result = await self._validate_tool(context_wrapper, tool_definition)
+                return json.loads(direct_result)
+        except Exception:
+            # Fallback to direct tool call if JSON extraction fails
+            context_wrapper = RunContextWrapper(None)
+            direct_result = await self._validate_tool(context_wrapper, tool_definition)
+            return json.loads(direct_result)
+    
+    async def document_tool_directly(self, tool_definition: str) -> str:
+        """Generate documentation for a tool definition using a dedicated agent.
+        
+        Args:
+            tool_definition: The tool definition as a JSON string
+            
+        Returns:
+            The generated documentation as a string
+        """
+        # Run the documentation through the agent loop
+        result = await Runner.run(
+            self.documentation_agent, 
+            f"Generate documentation for this tool definition: {tool_definition}"
+        )
+        
+        return result.final_output
 
 
 if __name__ == "__main__":
@@ -377,19 +468,19 @@ if __name__ == "__main__":
         # Create the Tool Keeper
         tool_keeper = ToolKeeper()
         
-        # Analyze the tool
-        print("Analyzing tool...")
+        # Analyze the tool using the agent
+        print("Analyzing tool via agent...")
         analysis = await tool_keeper.analyze_tool_directly(json.dumps(example_tool))
         print(json.dumps(analysis, indent=2))
         
-        # Validate the tool
-        print("\nValidating tool...")
+        # Validate the tool using the agent
+        print("\nValidating tool via agent...")
         validation = await tool_keeper.validate_tool_directly(json.dumps(example_tool))
         print(json.dumps(validation, indent=2))
         
-        # Generate documentation
-        print("\nGenerating documentation...")
-        docs = await tool_keeper.document_tool(None, json.dumps(example_tool))
+        # Generate documentation using the agent
+        print("\nGenerating documentation via agent...")
+        docs = await tool_keeper.document_tool_directly(json.dumps(example_tool))
         print(docs)
     
     asyncio.run(main())
